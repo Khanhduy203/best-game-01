@@ -3,7 +3,7 @@
 // with three.js from an import map, and the program hands it in. It copies game/
 // and screenshots/ from beside this file to /output and writes
 // /output/dossier.json, the summary the judge reads, with the vendored make.fun
-// library.
+// library. The screenshots' first file by name is the entry's cover image.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
