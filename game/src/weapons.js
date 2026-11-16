@@ -1,68 +1,88 @@
-// The armoury: four hitscan weapons plus the frag grenade. Each definition owns its
-// damage, headshot multiplier, magazine, fire rate, reload, spread and falloff;
-// this module owns the view models, the bloom that punishes spraying, and the
-// loadout (what the player owns this round, and which gun is in hand).
+// Guns, in data first: one row per weapon, zipped into definitions by field
+// name, so the armoury's numbers live in a table instead of four literals.
+// The view models come from part lists for the same reason: a box list per gun,
+// bent into a low-poly silhouette by one shared builder.
 import * as THREE from 'three';
 import { PALETTE } from './palette.js';
 
-export const WEAPONS = {
-  pistol: { id: 'pistol', name: 'P9 Sidearm', kind: 'pistol', price: 0, damage: 34, headMult: 4, mag: 12, reserve: 48, gap: 0.22, reload: 1.6, auto: false, spreadStill: 0.004, spreadMove: 0.02, recoil: 0.011, falloff: 18, zoom: 1 },
-  smg: { id: 'smg', name: 'VK-9 Ripper', kind: 'smg', price: 1200, damage: 26, headMult: 4, mag: 30, reserve: 120, gap: 0.075, reload: 2.0, auto: true, spreadStill: 0.006, spreadMove: 0.03, recoil: 0.007, falloff: 14, zoom: 1 },
-  rifle: { id: 'rifle', name: 'AR-77 Carbine', kind: 'rifle', price: 2700, damage: 36, headMult: 4, mag: 30, reserve: 90, gap: 0.1, reload: 2.2, auto: true, spreadStill: 0.003, spreadMove: 0.026, recoil: 0.01, falloff: 24, zoom: 1.5 },
-  sniper: { id: 'sniper', name: 'LANCE-50', kind: 'sniper', price: 4500, damage: 110, headMult: 4, mag: 5, reserve: 15, gap: 1.4, reload: 3.2, auto: false, spreadStill: 0.02, spreadMove: 0.05, adsSpread: 0.0005, recoil: 0.05, falloff: 60, zoom: 2.6 },
-};
-export const WEAPON_ORDER = ['pistol', 'smg', 'rifle', 'sniper'];
+const FIELDS = [
+  'id', 'name', 'kind', 'price', 'damage', 'headMult', 'mag', 'reserve',
+  'gap', 'reload', 'auto', 'spreadStill', 'spreadMove', 'recoil', 'falloff', 'zoom',
+];
+const ROWS = [
+  ['pistol', 'P9 Sidearm', 'pistol', 0, 34, 4, 12, 48, 0.22, 1.6, false, 0.004, 0.02, 0.011, 18, 1],
+  ['smg', 'VK-9 Ripper', 'smg', 1200, 26, 4, 30, 120, 0.075, 2, true, 0.006, 0.03, 0.007, 14, 1],
+  ['rifle', 'AR-77 Carbine', 'rifle', 2700, 36, 4, 30, 90, 0.1, 2.2, true, 0.003, 0.026, 0.01, 24, 1.5],
+  ['sniper', 'LANCE-50', 'sniper', 4500, 110, 4, 5, 15, 1.4, 3.2, false, 0.02, 0.05, 0.05, 60, 2.6],
+];
 
-const MUZZLE_TIME = 0.06;
-const BLOOM_PER_SHOT = 0.004;
-const BLOOM_DECAY = 0.09; // per second, so a burst needs a pause to settle
+export const WEAPONS = {};
+for (const row of ROWS) {
+  const def = {};
+  FIELDS.forEach((key, i) => {
+    def[key] = row[i];
+  });
+  WEAPONS[def.id] = def;
+}
+WEAPONS.sniper.adsSpread = 0.0005;
+export const WEAPON_ORDER = ROWS.map((row) => row[0]);
+
+// View-model parts: [width, height, depth, x, y, z, material] per box.
+const PARTS = {
+  pistol: [
+    [0.07, 0.09, 0.24, 0, 0, -0.1, 'body'],
+    [0.06, 0.14, 0.07, 0, -0.1, 0.04, 'grip'],
+    [0.03, 0.03, 0.06, 0, 0.055, -0.16, 'dark'],
+  ],
+  smg: [
+    [0.08, 0.1, 0.4, 0, 0, -0.12, 'body'],
+    [0.05, 0.05, 0.2, 0, 0.02, -0.36, 'grip'],
+    [0.06, 0.18, 0.09, 0, -0.12, -0.12, 'grip'],
+    [0.07, 0.08, 0.14, 0, -0.01, 0.16, 'grip'],
+  ],
+  rifle: [
+    [0.09, 0.1, 0.44, 0, 0, -0.1, 'body'],
+    [0.045, 0.045, 0.34, 0, 0.025, -0.44, 'grip'],
+    [0.075, 0.08, 0.22, 0, -0.02, 0.28, 'grip'],
+    [0.06, 0.14, 0.08, 0, -0.11, -0.02, 'grip'],
+    [0.04, 0.05, 0.12, 0, 0.075, -0.12, 'dark'],
+  ],
+  sniper: [
+    [0.1, 0.11, 0.5, 0, 0, -0.12, 'dark'],
+    [0.04, 0.04, 0.5, 0, 0.03, -0.56, 'body'],
+    [0.05, 0.06, 0.22, 0, 0.1, -0.14, 'grip'],
+    [0.08, 0.09, 0.24, 0, -0.02, 0.3, 'grip'],
+    [0.06, 0.12, 0.07, 0, -0.1, 0.02, 'grip'],
+  ],
+};
+
+const FLASH_SECONDS = 0.06;
+const BLOOM_SHOT = 0.004;
+const BLOOM_MAX = 0.03;
+const BLOOM_RECOVER = 0.09;
+const KICK_SHOT = 0.055;
+const SWITCH_PENALTY = 0.25;
 
 export function createWeapons(camera) {
-  const grip = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.hairline), roughness: 0.7, metalness: 0.2 });
-  const bodyMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.ink), roughness: 0.5, metalness: 0.35 });
-  const dark = new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.surface), roughness: 0.6, metalness: 0.4 });
-
-  // One boxy view model per gun, each with its own silhouette: the pistol is
-  // short, the SMG has a fat magazine, the rifle a long barrel, the sniper a
-  // scope and a bipod-less heavy barrel.
-  function buildModel(id) {
-    const model = new THREE.Group();
-    const add = (w, h, d, x, y, z, mat) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
-      mesh.position.set(x, y, z);
-      model.add(mesh);
-      return mesh;
-    };
-    if (id === 'pistol') {
-      add(0.07, 0.09, 0.24, 0, 0, -0.1, bodyMat);
-      add(0.06, 0.14, 0.07, 0, -0.1, 0.04, grip);
-      add(0.03, 0.03, 0.06, 0, 0.055, -0.16, dark);
-    } else if (id === 'smg') {
-      add(0.08, 0.1, 0.4, 0, 0, -0.12, bodyMat);
-      add(0.05, 0.05, 0.2, 0, 0.02, -0.36, grip);
-      add(0.06, 0.18, 0.09, 0, -0.12, -0.12, grip);
-      add(0.07, 0.08, 0.14, 0, -0.01, 0.16, grip);
-    } else if (id === 'rifle') {
-      add(0.09, 0.1, 0.44, 0, 0, -0.1, bodyMat);
-      add(0.045, 0.045, 0.34, 0, 0.025, -0.44, grip);
-      add(0.075, 0.08, 0.22, 0, -0.02, 0.28, grip);
-      add(0.06, 0.14, 0.08, 0, -0.11, -0.02, grip);
-      add(0.04, 0.05, 0.12, 0, 0.075, -0.12, dark);
-    } else {
-      add(0.1, 0.11, 0.5, 0, 0, -0.12, dark);
-      add(0.04, 0.04, 0.5, 0, 0.03, -0.56, bodyMat);
-      add(0.05, 0.06, 0.22, 0, 0.1, -0.14, grip);
-      add(0.08, 0.09, 0.24, 0, -0.02, 0.3, grip);
-      add(0.06, 0.12, 0.07, 0, -0.1, 0.02, grip);
-    }
-    model.position.set(0.24, -0.2, -0.42);
-    model.visible = false;
-    camera.add(model);
-    return model;
-  }
+  const mats = {
+    grip: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.hairline), roughness: 0.7, metalness: 0.2 }),
+    body: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.ink), roughness: 0.5, metalness: 0.35 }),
+    dark: new THREE.MeshStandardMaterial({ color: new THREE.Color(PALETTE.surface), roughness: 0.6, metalness: 0.4 }),
+  };
 
   const models = {};
-  for (const id of WEAPON_ORDER) models[id] = buildModel(id);
+  for (const id of WEAPON_ORDER) {
+    const group = new THREE.Group();
+    for (const [w, h, d, x, y, z, mat] of PARTS[id]) {
+      const piece = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mats[mat]);
+      piece.position.set(x, y, z);
+      group.add(piece);
+    }
+    group.position.set(0.24, -0.2, -0.42);
+    group.visible = false;
+    camera.add(group);
+    models[id] = group;
+  }
 
   const flash = new THREE.Mesh(
     new THREE.PlaneGeometry(0.2, 0.2),
@@ -75,8 +95,9 @@ export function createWeapons(camera) {
   flashLight.position.set(0.24, -0.16, -0.6);
   camera.add(flashLight);
 
+  const freshSlot = (def) => ({ def, mag: def.mag, reserve: def.reserve });
   const state = {
-    owned: [{ def: WEAPONS.pistol, mag: WEAPONS.pistol.mag, reserve: WEAPONS.pistol.reserve }],
+    owned: [freshSlot(WEAPONS.pistol)],
     current: 0,
     cooldown: 0,
     reloadLeft: 0,
@@ -88,89 +109,91 @@ export function createWeapons(camera) {
     bobTime: 0,
   };
 
-  function currentSlot() {
-    return state.owned[state.current];
+  const slot = () => state.owned[state.current];
+  const def = () => slot().def;
+
+  function showCurrent() {
+    for (const id of WEAPON_ORDER) models[id].visible = id === def().id;
+    state.reloadLeft = 0;
+    if (state.cooldown < SWITCH_PENALTY) state.cooldown = SWITCH_PENALTY;
+  }
+  showCurrent();
+
+  function tickTimers(dt) {
+    state.cooldown = Math.max(0, state.cooldown - dt);
+    state.flash = Math.max(0, state.flash - dt);
+    state.kick *= Math.max(0, 1 - dt * 14);
+    state.bloom = Math.max(0, state.bloom - BLOOM_RECOVER * dt);
+  }
+
+  function poseModel(dt, speed, aiming) {
+    const model = models[def().id];
+    state.bobTime += dt * (2 + speed * 1.6);
+    const stride = Math.min(1, speed / 5.2) * (aiming ? 0.15 : 1);
+    const homeX = aiming ? 0 : 0.24;
+    const homeY = aiming ? -0.185 : -0.2;
+    const ease = Math.min(1, dt * 12);
+    model.position.x += (homeX - model.position.x) * ease;
+    model.position.y = homeY + Math.sin(state.bobTime * 2) * 0.006 * stride;
+    model.position.z = -0.42 + state.kick + Math.cos(state.bobTime) * 0.004 * stride;
+    model.rotation.x = state.kick * 2.2;
+  }
+
+  function tickReload(dt) {
+    if (state.reloadLeft <= 0) return;
+    state.reloadLeft = Math.max(0, state.reloadLeft - dt);
+    const done = 1 - state.reloadLeft / state.reloadTotal;
+    models[def().id].rotation.x = -0.55 * Math.sin(done * Math.PI);
+    if (state.reloadLeft > 0) return;
+    const current = slot();
+    const moved = Math.min(current.def.mag - current.mag, current.reserve);
+    current.mag += moved;
+    current.reserve -= moved;
   }
 
   function step(dt, speed, aiming) {
-    state.cooldown = Math.max(0, state.cooldown - dt);
-    state.flash = Math.max(0, state.flash - dt);
-    state.kick += (0 - state.kick) * Math.min(1, dt * 14);
-    state.bloom = Math.max(0, state.bloom - BLOOM_DECAY * dt);
-    const model = models[currentSlot().def.id];
-    // Walk bob, scaled by speed; aiming pulls the gun to the centre and stills it.
-    state.bobTime += dt * (2 + speed * 1.6);
-    const bob = Math.min(1, speed / 5.2) * (aiming ? 0.15 : 1);
-    const targetX = aiming ? 0 : 0.24;
-    const targetY = aiming ? -0.185 : -0.2;
-    model.position.x += (targetX - model.position.x) * Math.min(1, dt * 12);
-    model.position.y = targetY + Math.sin(state.bobTime * 2) * 0.006 * bob;
-    model.position.z = -0.42 + state.kick + Math.cos(state.bobTime) * 0.004 * bob;
-    model.rotation.x = state.kick * 2.2;
+    tickTimers(dt);
+    poseModel(dt, speed, aiming);
     flash.visible = state.flash > 0;
     flash.rotation.z = state.flash * 30;
     flashLight.intensity = state.flash > 0 ? 18 : 0;
-    if (state.reloadLeft > 0) {
-      state.reloadLeft = Math.max(0, state.reloadLeft - dt);
-      const progress = 1 - state.reloadLeft / state.reloadTotal;
-      model.rotation.x = -0.55 * Math.sin(progress * Math.PI);
-      if (state.reloadLeft === 0) {
-        const slot = currentSlot();
-        const need = slot.def.mag - slot.mag;
-        const take = Math.min(need, slot.reserve);
-        slot.mag += take;
-        slot.reserve -= take;
-      }
-    }
+    tickReload(dt);
   }
-
-  function showCurrent() {
-    for (const id of WEAPON_ORDER) models[id].visible = false;
-    models[currentSlot().def.id].visible = true;
-    state.reloadLeft = 0;
-    state.cooldown = Math.max(state.cooldown, 0.25); // a switch costs a beat
-  }
-  showCurrent();
 
   return {
     state,
     step,
-    currentDef() {
-      return currentSlot().def;
-    },
-    currentSlot,
+    currentDef: def,
+    currentSlot: slot,
     ready() {
-      const slot = currentSlot();
-      return slot.mag > 0 && state.cooldown === 0 && state.reloadLeft === 0;
+      return slot().mag > 0 && state.cooldown === 0 && state.reloadLeft === 0;
     },
     pullTrigger() {
-      state.cooldown = currentSlot().def.gap;
-      state.flash = MUZZLE_TIME;
-      state.kick = 0.055;
-      state.bloom = Math.min(0.03, state.bloom + BLOOM_PER_SHOT);
+      state.cooldown = def().gap;
+      state.flash = FLASH_SECONDS;
+      state.kick = KICK_SHOT;
+      state.bloom = Math.min(BLOOM_MAX, state.bloom + BLOOM_SHOT);
     },
     takeRound() {
-      const slot = currentSlot();
-      if (slot.mag <= 0) return false;
-      slot.mag -= 1;
+      if (slot().mag <= 0) return false;
+      slot().mag -= 1;
       return true;
     },
     reload() {
-      const slot = currentSlot();
-      if (state.reloadLeft > 0 || slot.mag === slot.def.mag || slot.reserve === 0) return false;
-      state.reloadLeft = slot.def.reload;
-      state.reloadTotal = slot.def.reload;
+      const current = slot();
+      if (state.reloadLeft > 0 || current.mag >= current.def.mag || current.reserve <= 0) return false;
+      state.reloadLeft = current.def.reload;
+      state.reloadTotal = current.def.reload;
       return true;
     },
-    // Spread: still < crouched < moving < airborne, bloom on top; aiming down
-    // sights tightens it, and the sniper is only accurate scoped.
     spread(speed, aiming, crouching, onGround) {
-      const def = currentSlot().def;
-      let base = def.spreadStill + Math.min(1, speed / 5.2) * def.spreadMove;
-      if (crouching) base *= 0.7;
-      if (!onGround) base += 0.03;
-      if (aiming) base = def.adsSpread ?? base * 0.45;
-      return base + state.bloom;
+      const d = def();
+      const pace = Math.min(1, speed / 5.2);
+      let cone = d.spreadStill + pace * d.spreadMove;
+      if (crouching) cone *= 0.7;
+      if (!onGround) cone += 0.03;
+      if (aiming) cone = d.adsSpread ?? cone * 0.45;
+      return cone + state.bloom;
     },
     switchTo(index) {
       if (index < 0 || index >= state.owned.length || index === state.current) return false;
@@ -180,46 +203,43 @@ export function createWeapons(camera) {
     },
     cycle(direction) {
       if (state.owned.length < 2) return;
-      state.current = (state.current + direction + state.owned.length) % state.owned.length;
+      const n = state.owned.length;
+      state.current = (((state.current + direction) % n) + n) % n;
       showCurrent();
     },
     owns(id) {
-      return state.owned.some((slot) => slot.def.id === id);
+      return state.owned.some((entry) => entry.def.id === id);
     },
     buy(id) {
-      const def = WEAPONS[id];
-      const existing = state.owned.find((slot) => slot.def.id === id);
-      if (existing) {
-        existing.reserve = def.reserve;
-        existing.mag = def.mag;
+      const held = state.owned.find((entry) => entry.def.id === id);
+      if (held) {
+        held.mag = held.def.mag;
+        held.reserve = held.def.reserve;
         return true;
       }
-      state.owned.push({ def, mag: def.mag, reserve: def.reserve });
+      state.owned.push(freshSlot(WEAPONS[id]));
       state.current = state.owned.length - 1;
       showCurrent();
       return true;
     },
     refillAmmo() {
-      for (const slot of state.owned) {
-        slot.reserve = slot.def.reserve;
-        slot.mag = slot.def.mag;
+      for (const entry of state.owned) {
+        entry.mag = entry.def.mag;
+        entry.reserve = entry.def.reserve;
       }
     },
-    // Death drops everything but the sidearm; surviving a round keeps the loadout.
     dropToPistol() {
-      const pistol = state.owned.find((slot) => slot.def.id === 'pistol');
-      state.owned = [pistol ?? { def: WEAPONS.pistol, mag: WEAPONS.pistol.mag, reserve: WEAPONS.pistol.reserve }];
+      const sidearm = state.owned.find((entry) => entry.def.id === 'pistol');
+      state.owned = [sidearm ?? freshSlot(WEAPONS.pistol)];
       state.current = 0;
       state.grenades = 0;
       showCurrent();
     },
     resetRound(kept) {
-      // kept: the loadout carried over from a survived round, or null for pistol only.
-      if (kept && kept.length > 0) {
-        state.owned = kept.map((slot) => ({ def: slot.def, mag: slot.mag, reserve: slot.reserve }));
-      } else {
-        state.owned = [{ def: WEAPONS.pistol, mag: WEAPONS.pistol.mag, reserve: WEAPONS.pistol.reserve }];
-      }
+      state.owned =
+        kept && kept.length > 0
+          ? kept.map((entry) => ({ def: entry.def, mag: entry.mag, reserve: entry.reserve }))
+          : [freshSlot(WEAPONS.pistol)];
       state.current = state.owned.length - 1;
       state.cooldown = 0;
       state.reloadLeft = 0;
@@ -229,7 +249,7 @@ export function createWeapons(camera) {
       showCurrent();
     },
     snapshotLoadout() {
-      return state.owned.map((slot) => ({ def: slot.def, mag: slot.mag, reserve: slot.reserve }));
+      return state.owned.map((entry) => ({ def: entry.def, mag: entry.mag, reserve: entry.reserve }));
     },
   };
 }
