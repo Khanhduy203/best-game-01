@@ -1,5 +1,11 @@
 # SANDLINE — Depot 9
 
+[![make.fun · best-game-01](https://make.fun/badge/best-game-01.svg)](https://make.fun/bounty/best-game-01?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
+[![rank](https://make.fun/badge/best-game-01/Khanhduy203/best-game-01/rank.svg)](https://make.fun/bounty/best-game-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
+[![reward](https://make.fun/badge/best-game-01/Khanhduy203/best-game-01/reward.svg)](https://make.fun/bounty/best-game-01?utm_source=github&utm_medium=readme&utm_campaign=best-game-01)
+
+Entry for the [make.fun best-game-01 bounty](https://make.fun/bounty/best-game-01).
+
 A round-based tactical FPS in three.js, built for make.fun's `best-game-01`
 bounty. Counter-Strike-style, never a copy: an original dusk container yard,
 original weapons, bots and names.
