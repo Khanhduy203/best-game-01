@@ -1,163 +1,181 @@
-// The player: acceleration, friction, gravity, crouch and jump, resolved as a box
-// against the world's colliders one axis at a time, so a wall never swallows the
-// player. It also owns health and armour: armour absorbs half of every hit until
-// it runs out. Movement speed feeds weapon spread, so stopping to aim pays.
+// How the player moves: a capsule approximated by a box, pushed around by
+// acceleration and friction, pulled down by gravity, and stopped by the
+// world's colliders one axis at a time. Health sits here too, with armour
+// soaking half of every hit until it is spent.
 import * as THREE from 'three';
 
-const RADIUS = 0.34;
-const STAND_HEIGHT = 1.72;
-const CROUCH_HEIGHT = 1.12;
-const STAND_EYE = 1.6;
-const CROUCH_EYE = 1.02;
-const WALK_SPEED = 5.2;
-const CROUCH_SPEED = 2.4;
-const ADS_SPEED = 3.2;
-const GROUND_ACCEL = 42;
-const AIR_ACCEL = 9;
-const FRICTION = 9;
-const GRAVITY = 20;
-const JUMP_SPEED = 6.2;
+const BODY_R = 0.34;
+const H_TALL = 1.72;
+const H_LOW = 1.12;
+const EYE_TALL = 1.6;
+const EYE_LOW = 1.02;
+const V_RUN = 5.2;
+const V_SNEAK = 2.4;
+const V_AIM = 3.2;
+const A_FLOOR = 42;
+const A_SKY = 9;
+const DRAG = 9;
+const PULL = 20;
+const V_HOP = 6.2;
+const PITCH_MAX = 1.45;
+const LOOK_GAIN = 0.0022;
 
 export function createPlayer(colliders) {
-  const player = {
+  const self = {
     position: new THREE.Vector3(0, 0, 21),
     velocity: new THREE.Vector3(),
     yaw: 0,
     pitch: 0,
-    eye: STAND_EYE,
+    eye: EYE_TALL,
     onGround: true,
     crouching: false,
-    height: STAND_HEIGHT,
+    height: H_TALL,
     health: 100,
     armour: 0,
     alive: true,
   };
-  const probe = new THREE.Box3();
+  const box = new THREE.Box3();
   const wish = new THREE.Vector3();
 
-  // lift keeps the feet and the crown out of the horizontal tests, so standing on
-  // the floor is not read as walking into a wall.
-  function overlaps(x, y, z, height, lift) {
-    probe.min.set(x - RADIUS, y + lift, z - RADIUS);
-    probe.max.set(x + RADIUS, y + height - lift, z + RADIUS);
-    for (const collider of colliders) if (probe.intersectsBox(collider)) return collider;
+  const damp = (from, to, rate, dt) => from + (to - from) * Math.min(1, rate * dt);
+
+  // The box is shrunk by `inset` top and bottom, so the floor underfoot and
+  // the ceiling overhead never register as a wall in the way.
+  function collidesAt(px, py, pz, h, inset) {
+    box.min.set(px - BODY_R, py + inset, pz - BODY_R);
+    box.max.set(px + BODY_R, py + h - inset, pz + BODY_R);
+    for (const wall of colliders) {
+      if (box.intersectsBox(wall)) return wall;
+    }
     return null;
   }
 
-  function look(dx, dy, sensitivity = 0.0022) {
-    player.yaw -= dx * sensitivity;
-    player.pitch = Math.max(-1.45, Math.min(1.45, player.pitch - dy * sensitivity));
+  function turn(dx, dy, gain = LOOK_GAIN) {
+    self.yaw -= dx * gain;
+    self.pitch = Math.max(-PITCH_MAX, Math.min(PITCH_MAX, self.pitch - dy * gain));
   }
 
-  function recoil(pitchKick, yawKick) {
-    player.pitch = Math.min(1.45, player.pitch + pitchKick);
-    player.yaw += yawKick;
+  function kick(up, sideways) {
+    self.pitch = Math.min(PITCH_MAX, self.pitch + up);
+    self.yaw += sideways;
   }
 
-  function step(dt, keys, aiming) {
-    if (!player.alive) return;
-    const crouching = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
-    if (crouching && !player.crouching) {
-      player.crouching = true;
-      player.height = CROUCH_HEIGHT;
-    } else if (!crouching && player.crouching && !overlaps(player.position.x, player.position.y, player.position.z, STAND_HEIGHT, 0.02)) {
-      player.crouching = false;
-      player.height = STAND_HEIGHT;
+  function updateCrouch(keys) {
+    const wantLow = keys.has('ControlLeft') || keys.has('ControlRight') || keys.has('KeyC');
+    if (wantLow === self.crouching) return;
+    if (wantLow) {
+      self.crouching = true;
+      self.height = H_LOW;
+      return;
     }
-    const eyeTarget = player.crouching ? CROUCH_EYE : STAND_EYE;
-    player.eye += (eyeTarget - player.eye) * Math.min(1, dt * 12);
+    // Standing back up needs headroom; without it the player stays crouched.
+    if (!collidesAt(self.position.x, self.position.y, self.position.z, H_TALL, 0.02)) {
+      self.crouching = false;
+      self.height = H_TALL;
+    }
+  }
 
-    const forward = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
-    const strafe = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
+  function wishDir(keys) {
+    const fwd = (keys.has('KeyW') ? 1 : 0) - (keys.has('KeyS') ? 1 : 0);
+    const side = (keys.has('KeyD') ? 1 : 0) - (keys.has('KeyA') ? 1 : 0);
     wish.set(0, 0, 0);
-    if (forward || strafe) {
-      const sin = Math.sin(player.yaw);
-      const cos = Math.cos(player.yaw);
-      wish.set(-sin * forward + cos * strafe, 0, -cos * forward - sin * strafe).normalize();
-    }
-
-    let speed = player.crouching ? CROUCH_SPEED : WALK_SPEED;
-    if (aiming && !player.crouching) speed = ADS_SPEED;
-    const blend = Math.min(1, (player.onGround ? GROUND_ACCEL : AIR_ACCEL) * dt / speed);
-    player.velocity.x += (wish.x * speed - player.velocity.x) * blend;
-    player.velocity.z += (wish.z * speed - player.velocity.z) * blend;
-    if (player.onGround && !wish.lengthSq()) {
-      const damp = Math.max(0, 1 - FRICTION * dt);
-      player.velocity.x *= damp;
-      player.velocity.z *= damp;
-    }
-
-    if (keys.has('Space') && player.onGround) {
-      player.velocity.y = JUMP_SPEED;
-      player.onGround = false;
-    }
-    player.velocity.y -= GRAVITY * dt;
-
-    const nextX = player.position.x + player.velocity.x * dt;
-    if (!overlaps(nextX, player.position.y, player.position.z, player.height, 0.04)) player.position.x = nextX;
-    else player.velocity.x = 0;
-    const nextZ = player.position.z + player.velocity.z * dt;
-    if (!overlaps(player.position.x, player.position.y, nextZ, player.height, 0.04)) player.position.z = nextZ;
-    else player.velocity.z = 0;
-
-    player.position.y += player.velocity.y * dt;
-    player.onGround = false;
-    const hit = overlaps(player.position.x, player.position.y, player.position.z, player.height, 0);
-    if (hit && player.velocity.y <= 0) {
-      player.position.y = hit.max.y;
-      player.velocity.y = 0;
-      player.onGround = true;
-    } else if (hit) {
-      player.position.y = hit.min.y - player.height;
-      player.velocity.y = 0;
-    }
-    if (player.position.y < 0) {
-      player.position.y = 0;
-      player.velocity.y = 0;
-      player.onGround = true;
-    }
-    player.velocity.y = Math.max(-30, player.velocity.y);
+    if (fwd === 0 && side === 0) return false;
+    const sin = Math.sin(self.yaw);
+    const cos = Math.cos(self.yaw);
+    // Facing is -Z at yaw 0; the right hand is +X.
+    wish.set(-sin * fwd + cos * side, 0, -cos * fwd - sin * side).normalize();
+    return true;
   }
 
-  // Armour absorbs half the damage and loses that many points; the rest is health.
-  function damage(amount) {
-    if (!player.alive) return 0;
-    let remaining = amount;
-    if (player.armour > 0) {
-      const absorbed = Math.min(player.armour, Math.ceil(amount / 2));
-      player.armour -= absorbed;
-      remaining = amount - absorbed;
+  function tick(dt, keys, aiming) {
+    if (!self.alive) return;
+    updateCrouch(keys);
+    self.eye = damp(self.eye, self.crouching ? EYE_LOW : EYE_TALL, 12, dt);
+
+    const moving = wishDir(keys);
+    let top = self.crouching ? V_SNEAK : V_RUN;
+    if (aiming && !self.crouching) top = V_AIM;
+    const accel = self.onGround ? A_FLOOR : A_SKY;
+    const blend = Math.min(1, (accel * dt) / top);
+    self.velocity.x += (wish.x * top - self.velocity.x) * blend;
+    self.velocity.z += (wish.z * top - self.velocity.z) * blend;
+    if (self.onGround && !moving) {
+      const kept = Math.max(0, 1 - DRAG * dt);
+      self.velocity.x *= kept;
+      self.velocity.z *= kept;
     }
-    player.health = Math.max(0, player.health - remaining);
-    if (player.health <= 0) player.alive = false;
-    return remaining;
+
+    if (keys.has('Space') && self.onGround) {
+      self.velocity.y = V_HOP;
+      self.onGround = false;
+    }
+    self.velocity.y -= PULL * dt;
+
+    const nx = self.position.x + self.velocity.x * dt;
+    if (!collidesAt(nx, self.position.y, self.position.z, self.height, 0.04)) self.position.x = nx;
+    else self.velocity.x = 0;
+    const nz = self.position.z + self.velocity.z * dt;
+    if (!collidesAt(self.position.x, self.position.y, nz, self.height, 0.04)) self.position.z = nz;
+    else self.velocity.z = 0;
+
+    self.position.y += self.velocity.y * dt;
+    self.onGround = false;
+    const under = collidesAt(self.position.x, self.position.y, self.position.z, self.height, 0);
+    if (under && self.velocity.y <= 0) {
+      self.position.y = under.max.y;
+      self.velocity.y = 0;
+      self.onGround = true;
+    } else if (under) {
+      self.position.y = under.min.y - self.height;
+      self.velocity.y = 0;
+    }
+    if (self.position.y < 0) {
+      self.position.y = 0;
+      self.velocity.y = 0;
+      self.onGround = true;
+    }
+    if (self.velocity.y < -30) self.velocity.y = -30;
   }
 
-  function reset(x, z, yaw) {
-    player.position.set(x, 0, z);
-    player.velocity.set(0, 0, 0);
-    player.yaw = yaw;
-    player.pitch = 0;
-    player.eye = STAND_EYE;
-    player.height = STAND_HEIGHT;
-    player.crouching = false;
-    player.onGround = true;
-    player.health = 100;
-    player.alive = true;
-    // Armour is bought per round and kept only while the player survives; the
-    // economy module restores it on a survived round, otherwise it stays 0.
-    player.armour = 0;
+  // Armour takes half the hit (rounded up) and spends that many of its own
+  // points; whatever is left comes off health.
+  function hurt(amount) {
+    if (!self.alive) return 0;
+    const soaked = self.armour > 0 ? Math.min(self.armour, Math.ceil(amount / 2)) : 0;
+    self.armour -= soaked;
+    const taken = amount - soaked;
+    self.health = Math.max(0, self.health - taken);
+    if (self.health <= 0) self.alive = false;
+    return taken;
+  }
+
+  function spawn(x, z, yaw) {
+    self.position.set(x, 0, z);
+    self.velocity.set(0, 0, 0);
+    self.yaw = yaw;
+    self.pitch = 0;
+    self.eye = EYE_TALL;
+    self.height = H_TALL;
+    self.crouching = false;
+    self.onGround = true;
+    self.health = 100;
+    self.alive = true;
+    // A fresh round starts unarmoured; the economy hands armour back only to
+    // a player who survived the previous round.
+    self.armour = 0;
+  }
+
+  function speed() {
+    return Math.hypot(self.velocity.x, self.velocity.z);
   }
 
   return {
-    state: player,
-    step,
-    look,
-    recoil,
-    damage,
-    reset,
-    groundSpeed() {
-      return Math.hypot(player.velocity.x, player.velocity.z);
-    },
+    state: self,
+    step: tick,
+    look: turn,
+    recoil: kick,
+    damage: hurt,
+    reset: spawn,
+    groundSpeed: speed,
   };
 }
